@@ -1,3 +1,4 @@
+
 import tkinter as tk
 
 from ui.app import ChatApp
@@ -5,9 +6,7 @@ from ui.app import ChatApp
 
 def main():
     root = tk.Tk()
-
-    app = ChatApp(root)
-
+    ChatApp(root)
     root.mainloop()
 
 
