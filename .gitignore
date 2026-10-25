@@ -1,0 +1,6 @@
+# Ignore legacy cache files from previous versions; current indexing reads source files.
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/

@@ -308,7 +308,7 @@ class RagView(ttk.Frame):
     def clear_database(self):
         confirmed = messagebox.askyesno(
             "Подтверждение очистки",
-            "Удалить ВСЕ чанки и embedding-векторы из PostgreSQL?\n\n"
+            "Удалить все документы и чанки НОВОГО RAG-индекса?\nСтарая таблица chunks не изменится.\n\n"
             "Это действие нельзя отменить.",
             icon="warning",
             parent=self,
@@ -342,7 +342,7 @@ class RagView(ttk.Frame):
         self.progress.configure(value=0)
         self.progress_label.configure(text="Ожидание обработки")
         self.status_var.set(
-            f"База очищена. Удалено чанков: {deleted_count}."
+            f"Новый индекс очищен. Удалено чанков: {deleted_count}."
         )
         self.refresh_chunks()
 

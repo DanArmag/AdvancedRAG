@@ -1,0 +1,10 @@
+# Базовые зависимости RAG
+psycopg2-binary
+requests
+tiktoken
+pypdf
+python-docx
+Pillow
+
+# OCR изображений (нужна также отдельная установка Tesseract OCR)
+pytesseract

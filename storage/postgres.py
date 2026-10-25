@@ -9,89 +9,53 @@ def get_connection() -> connection:
 
 
 def initialize_database() -> None:
-    """Создаёт таблицу чанков и при необходимости обновляет её схему."""
+    """Создаёт новую схему RAG, не изменяя прежнюю таблицу chunks."""
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            # Расширение должно быть создано до использования типа vector.
             cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS chunks (
-                    id BIGSERIAL PRIMARY KEY,
-                    document_path TEXT NOT NULL,
-                    chunk_index INTEGER NOT NULL,
-                    content TEXT NOT NULL,
-                    embedding JSONB,
-                    embedding_vector vector,
-                    embedding_model TEXT,
-                    token_count INTEGER,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    CONSTRAINT uq_chunks_document_index
-                        UNIQUE (document_path, chunk_index),
-                    CONSTRAINT chk_chunks_index
-                        CHECK (chunk_index >= 0),
-                    CONSTRAINT chk_chunks_token_count
-                        CHECK (token_count IS NULL OR token_count >= 0)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS rag_documents (
+                    id UUID PRIMARY KEY,
+                    source_uri TEXT NOT NULL UNIQUE,
+                    file_name TEXT NOT NULL,
+                    file_type TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    file_size BIGINT NOT NULL CHECK (file_size >= 0),
+                    status TEXT NOT NULL DEFAULT 'indexed',
+                    indexed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
-                """
-            )
+            """)
 
-            # Миграции для уже существующей таблицы.
-            cursor.execute(
-                "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding JSONB"
-            )
-            cursor.execute(
-                "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding_vector vector"
-            )
-            cursor.execute(
-                "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding_model TEXT"
-            )
-            cursor.execute(
-                "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS token_count INTEGER"
-            )
-            cursor.execute(
-                "ALTER TABLE chunks DROP CONSTRAINT IF EXISTS chk_chunks_content_length"
-            )
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS rag_chunks (
+                    id BIGSERIAL PRIMARY KEY,
+                    document_id UUID NOT NULL
+                        REFERENCES rag_documents(id) ON DELETE CASCADE,
+                    chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+                    content_key TEXT NOT NULL DEFAULT 'source',
+                    locator JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    token_count INTEGER CHECK (
+                        token_count IS NULL OR token_count >= 0
+                    ),
+                    embedding_model TEXT NOT NULL,
+                    embedding_vector vector NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (document_id, chunk_index, embedding_model)
+                )
+            """)
 
-            cursor.execute(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                        FROM pg_constraint
-                        WHERE conname = 'chk_chunks_token_count'
-                          AND conrelid = 'chunks'::regclass
-                    ) THEN
-                        ALTER TABLE chunks
-                            ADD CONSTRAINT chk_chunks_token_count
-                            CHECK (token_count IS NULL OR token_count >= 0);
-                    END IF;
-                END
-                $$;
-                """
-            )
+            cursor.execute("ALTER TABLE rag_chunks ALTER COLUMN content_key SET DEFAULT 'source'")
 
-            # Переносим старые JSONB-векторы в колонку pgvector.
-            cursor.execute(
-                """
-                UPDATE chunks
-                SET embedding_vector = embedding::text::vector
-                WHERE embedding IS NOT NULL
-                  AND embedding_vector IS NULL
-                """
-            )
-
-            cursor.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_chunks_document_path
-                ON chunks (document_path)
-                """
-            )
-            cursor.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_chunks_created_at
-                ON chunks (created_at DESC)
-                """
-            )
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_rag_chunks_document_id
+                ON rag_chunks (document_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_rag_chunks_model
+                ON rag_chunks (embedding_model)
+            """)
+            # Векторный индекс намеренно не создаём автоматически:
+            # модели могут иметь разные размерности. После выбора одной
+            # embedding-модели можно добавить HNSW индекс под её размерность.
