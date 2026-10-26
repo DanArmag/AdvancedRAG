@@ -143,3 +143,49 @@ class LMStudioClient:
 
         except Exception as exc:
             on_error(str(exc))
+
+    def complete_chat(
+        self,
+        model: str,
+        messages: List[dict],
+        *,
+        temperature: float = 0.2,
+        response_format: dict | None = None,
+        timeout: int = 180,
+    ) -> str:
+        """Выполняет обычный (не потоковый) запрос к chat completions API."""
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "temperature": temperature,
+        }
+        if response_format is not None:
+            payload["response_format"] = response_format
+
+        request = Request(
+            self.config.chat_url,
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            raise LMStudioError(f"Ошибка запроса к LM Studio: {exc}") from exc
+
+        choices = result.get("choices") or []
+        if not choices:
+            raise LMStudioError("LM Studio вернула ответ без choices.")
+        message = choices[0].get("message") or {}
+        content = message.get("content", "")
+        if isinstance(content, list):
+            # Некоторые серверы возвращают content как список текстовых блоков.
+            content = "".join(
+                item.get("text", "") for item in content
+                if isinstance(item, dict)
+            )
+        if not isinstance(content, str) or not content.strip():
+            raise LMStudioError("LM Studio вернула пустой ответ.")
+        return content.strip()

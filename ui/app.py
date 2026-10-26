@@ -7,6 +7,7 @@ from api.lm_studio import LMStudioClient, LMStudioError
 from config import CONFIG
 from models.chat import ChatHistory
 from storage.postgres import initialize_database
+from services.rag_orchestrator import RAGOrchestrator
 
 from ui.chat_view import ChatView
 from ui.input_bar import InputBar
@@ -25,6 +26,7 @@ class ChatApp:
 
         self.client = LMStudioClient(CONFIG.lm_studio)
         self.history = ChatHistory()
+        self.orchestrator = RAGOrchestrator(client=self.client)
         self.chat_model = None
         self.generating = False
 
@@ -34,7 +36,7 @@ class ChatApp:
             messagebox.showerror(
                 "PostgreSQL недоступен",
                 "Не удалось подключиться к PostgreSQL "
-                "или создать таблицу chunks.\n\n"
+                "или инициализировать таблицы RAG.\n\n"
                 f"{exc}\n\n"
                 "Проверь Docker Compose и RAG_DATABASE_URL.",
                 parent=self.root,
@@ -190,35 +192,31 @@ class ChatApp:
         ).start()
 
     def _generation_worker(self):
-        response_parts = []
-
-        def on_token(token: str):
-            response_parts.append(token)
+        try:
+            result = self.orchestrator.run(
+                model=self.chat_model,
+                user_message=self.history.messages[-1].content,
+                history=self.history.get_messages(),
+            )
             self.root.after(
                 0,
-                lambda token=token: self.chat_view.append(
-                    token, "assistant"
-                ),
+                lambda result=result: self._generation_complete(result),
             )
-
-        def on_finished():
-            response = "".join(response_parts)
-            self.history.add_assistant_message(response)
-            self.root.after(0, self._generation_finished)
-
-        def on_error(error: str):
+        except Exception as exc:
+            error = str(exc)
             self.root.after(
                 0,
                 lambda error=error: self._generation_error(error),
             )
 
-        self.client.stream_chat(
-            model=self.chat_model,
-            messages=self.history.get_messages(),
-            on_token=on_token,
-            on_finished=on_finished,
-            on_error=on_error,
-        )
+    def _generation_complete(self, result: dict):
+        diagnostics = result.get("diagnostics", "")
+        answer = result.get("answer", "").strip()
+        if diagnostics:
+            self.chat_view.append(diagnostics + "\n\n", "system")
+        self.chat_view.append(answer + "\n\n", "assistant")
+        self.history.add_assistant_message(answer)
+        self._generation_finished()
 
     def _generation_finished(self):
         self.chat_view.append("\n\n")

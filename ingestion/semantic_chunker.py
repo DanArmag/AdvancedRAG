@@ -24,6 +24,18 @@ class SemanticChunker:
     def count_tokens(self, text: str) -> int:
         return len(self.encoding.encode(text))
 
+    def _fallback_index(self, candidate_texts: list[str]) -> int:
+        """Выбирает допустимую границу без участия LLM."""
+        if not candidate_texts:
+            return 0
+
+        return min(
+            range(len(candidate_texts)),
+            key=lambda i: abs(
+                self.count_tokens(candidate_texts[i]) - self.target
+            ),
+        )
+
     def _units(self, text: str) -> list[str]:
         # Сохраняем разделители, чтобы восстановить исходный текст.
         parts = re.split(r"(\n+|(?<=[.!?])\s+)", text)
@@ -112,19 +124,50 @@ class SemanticChunker:
         content = result["choices"][0]["message"]["content"]
 
         try:
-            parsed = json.loads(content)
-            index = int(parsed["index"])
-        except (ValueError, KeyError, TypeError) as exc:
-            raise RuntimeError(
-                f"LLM вернула некорректный выбор границы: {content}"
-            ) from exc
+            # Удаляем возможные Markdown-ограждения.
+            cleaned = content.strip()
+            cleaned = re.sub(
+                r"^```(?:json)?\s*|\s*```$",
+                "",
+                cleaned,
+                flags=re.IGNORECASE,
+            ).strip()
 
-        if not 0 <= index < len(candidate_texts):
-            raise RuntimeError(
-                f"LLM выбрала несуществующую границу: {index}"
+            parsed = json.loads(cleaned)
+
+            # Принимаем только ожидаемый формат:
+            # {"index": 0}
+            if not isinstance(parsed, dict) or set(parsed.keys()) != {"index"}:
+                raise ValueError("Ожидался JSON только с полем 'index'.")
+
+            raw_index = parsed["index"]
+
+            # Не принимаем bool и дробные числа вместо целого индекса.
+            if isinstance(raw_index, bool):
+                raise ValueError("Индекс не может быть boolean.")
+
+            if isinstance(raw_index, int):
+                index = raw_index
+            elif isinstance(raw_index, str) and raw_index.strip().isdigit():
+                index = int(raw_index.strip())
+            else:
+                raise ValueError("Индекс должен быть целым числом.")
+
+            if not 0 <= index < len(candidate_texts):
+                raise ValueError(f"Индекс вне допустимого диапазона: {index}")
+
+            return index
+
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            fallback = self._fallback_index(candidate_texts)
+
+            print(
+                "[SemanticChunker] Некорректный ответ LLM. "
+                f"Используется резервная граница {fallback}. "
+                f"Причина: {exc}. Ответ модели: {content[:500]!r}"
             )
 
-        return index
+            return fallback
 
     def split(
         self,

@@ -1,4 +1,5 @@
 import uuid
+import json
 from dataclasses import dataclass
 
 from psycopg2.extras import Json
@@ -182,6 +183,33 @@ class ChunkRepository:
                 cursor.execute("DELETE FROM rag_documents")
         return deleted
 
+    @staticmethod
+    def _parse_embedding(value):
+        if value is None:
+            return None
+
+        # Некоторые адаптеры возвращают pgvector как строку.
+        if isinstance(value, str):
+            value = value.strip()
+
+            if not value:
+                return None
+
+            try:
+                # Формат JSON: [0.1, 0.2, ...]
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                # Запасной вариант для формата pgvector: [0.1,0.2,...]
+                if value.startswith("[") and value.endswith("]"):
+                    value = value[1:-1].split(",")
+                else:
+                    raise ValueError("Неизвестный формат embedding_vector")
+
+        try:
+            return [float(item) for item in value]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Не удалось преобразовать embedding_vector в числа") from exc
+
     def get_all(self, search: str = "", limit: int = 1000, offset: int = 0):
         if limit < 1 or offset < 0:
             raise ValueError("Некорректные limit или offset.")
@@ -191,7 +219,8 @@ class ChunkRepository:
                     """
                     SELECT c.id, d.source_uri, c.chunk_index,
                            c.content_key, c.created_at, c.embedding_model,
-                           c.token_count, c.locator, c.metadata
+                           c.token_count, c.locator, c.metadata,
+                           c.embedding_vector
                     FROM rag_chunks c
                     JOIN rag_documents d ON d.id = c.document_id
                     WHERE d.source_uri ILIKE %s OR d.file_name ILIKE %s
@@ -211,7 +240,7 @@ class ChunkRepository:
                 chunk_index=row[2],
                 content=content,
                 created_at=row[4].isoformat(),
-                embedding=None,
+                embedding=self._parse_embedding(row[9]),
                 embedding_model=row[5],
                 token_count=row[6],
                 content_key=row[3],
